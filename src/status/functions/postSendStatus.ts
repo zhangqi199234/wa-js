@@ -18,7 +18,11 @@ import { SendMessageReturn } from '../../chat';
 import { MsgStore, StatusV3Store } from '../../whatsapp';
 
 export function postSendStatus(result: SendMessageReturn): void {
-  result.sendMsgResult.then(async () => {
+  if (!result.sendMsgResult) {
+    return;
+  }
+
+  Promise.resolve(result.sendMsgResult).then(async () => {
     const msg = MsgStore.get(result.id);
 
     if (!msg) {

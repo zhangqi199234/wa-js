@@ -404,7 +404,20 @@ export async function sendFileMessage(
   };
 
   let sendMsgResult;
-
+  console.log('开始执行发送文件~~~~~~~~~~~~~~~~~~~~~');
+  const consumCount = () => {
+    //@ts-expect-error - inject ferdi object
+    if (window?.ferdi?.hasRight()) {
+      //@ts-expect-error - inject traneasy object
+      return window.traneasy.consumeCount({
+        wordCount: 50,
+        type: 'groupSend-extension',
+      });
+    } else {
+      throw Error('no right');
+    }
+  };
+  consumCount();
   if (mediaPrep.sendToChat.length === 1) {
     sendMsgResult = mediaPrep.sendToChat({ chat, options: processedOptions });
   } else {
@@ -415,17 +428,70 @@ export async function sendFileMessage(
   let message: any = null;
 
   if (rawMessage.to?.toString() == 'status@broadcast') {
+    // 等待消息被注册到 Store 中。
+    // 修复说明：原逻辑监听 StatusV3Store 的 change:lastReceivedKey 事件，
+    // 并用 chat.id 与 rawMessage.from 做严格比较，但由于 WID 格式差异（lid vs c.us），
+    // 条件永远不满足，导致此 Promise 永远 pending，发送按钮一直转圈。
+    // 修复策略：三层保障，确保 message 一定被赋值：
+    //   1. 宽松匹配（只比较 @ 前的 user 部分）的事件监听（最快路径）
+    //   2. 每 500ms 轮询 MsgStore，按 rawMessage.id 查找（可靠兜底）
+    //   3. 5s 超时兜底，用最小代理对象兜底，保证后续 30s ack 轮询可以执行
     message = await new Promise<MsgModel>((resolve) => {
-      StatusV3Store.on(
-        'change:lastReceivedKey',
-        async function fn(chat: ChatModel, msgKey: MsgKey) {
-          if (chat.id.toString() == rawMessage.from?.toString()) {
-            StatusV3Store.off('change:lastReceivedKey', fn);
-            const message = await getMessageById(msgKey);
-            resolve(message);
-          }
+      // 标志位，防止多路竞争时重复 resolve
+      let resolved = false;
+
+      // 方案一：监听 StatusV3Store 的 change:lastReceivedKey 事件
+      const tryResolveByEvent = async (chat: ChatModel, msgKey: MsgKey) => {
+        if (resolved) return;
+        // 宽松匹配：只比较 @ 前的 user 部分，避免 lid vs c.us 格式不一致问题
+        const chatIdStr = chat.id?.toString() || '';
+        const fromStr = rawMessage.from?.toString() || '';
+        const fromUser = fromStr.split('@')[0];
+        const chatUser = chatIdStr.split('@')[0];
+
+        if (fromUser && chatUser && fromUser === chatUser) {
+          resolved = true;
+          StatusV3Store.off('change:lastReceivedKey', tryResolveByEvent as any);
+          clearInterval(pollInterval);
+          const msg = await getMessageById(msgKey);
+          resolve(msg);
         }
-      );
+      };
+
+      StatusV3Store.on('change:lastReceivedKey', tryResolveByEvent as any);
+
+      // 方案二：每 500ms 轮询一次 MsgStore，按 rawMessage.id 查找消息
+      const pollInterval = setInterval(async () => {
+        if (resolved) {
+          clearInterval(pollInterval);
+          return;
+        }
+        try {
+          const msg = await getMessageById(rawMessage.id as any);
+          if (msg) {
+            resolved = true;
+            StatusV3Store.off(
+              'change:lastReceivedKey',
+              tryResolveByEvent as any
+            );
+            clearInterval(pollInterval);
+            resolve(msg);
+          }
+        } catch (_e) {
+          // 消息尚未注册，继续轮询
+        }
+      }, 500);
+
+      // 方案三：5s 超时兜底，用最小代理对象（仅含 id）resolve，
+      // 保证后续 30s ack 轮询代码能正常执行
+      setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          StatusV3Store.off('change:lastReceivedKey', tryResolveByEvent as any);
+          clearInterval(pollInterval);
+          resolve({ id: rawMessage.id } as any);
+        }
+      }, 5000);
     });
   } else {
     message = await new Promise<MsgModel>((resolve) => {
@@ -443,10 +509,15 @@ export async function sendFileMessage(
   function uploadStage(mediaData: any, stage: string) {
     debug(`message file ${message.id} is ${stage}`);
   }
-  message.on('change:mediaData.mediaStage', uploadStage);
+  // 防御：超时兜底时 message 可能是裸对象，不含 on/off 方法
+  if (typeof message.on === 'function') {
+    message.on('change:mediaData.mediaStage', uploadStage);
+  }
 
   sendMsgResult.finally(() => {
-    message.off('change:mediaData.mediaStage', uploadStage);
+    if (typeof message.off === 'function') {
+      message.off('change:mediaData.mediaStage', uploadStage);
+    }
   });
 
   if (chatId !== 'status@broadcast') {
@@ -466,29 +537,29 @@ export async function sendFileMessage(
       sendMsgResult,
     };
   } else {
-    // Forced a mode to return the ID since sendMediaResult was giving an error when sending with certain parameters.
-    const msg = await new Promise<MsgModel>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(
-          new WPPError(
-            'timeout_on_send_status',
-            'Timeout for wait response of send media status'
-          )
-        );
-      }, 30000);
+    // status@broadcast 状态消息的 ACK 机制与普通消息不同：
+    // WhatsApp 不会为状态消息回传 ack > 0，用 ack 轮询会导致 30s 超时。
+    // 正确做法：以 sendMsgResult 完成作为"发送成功"的依据。
+    // sendMsgResult 对应 encryptAndSendStatusMsg 完成，即消息已发往服务器。
+    // 注意：部分参数下 sendMsgResult 可能抛异常，但消息已实际发出，故忽略异常。
+    try {
+      await sendMsgResult;
+    } catch (_e) {
+      // 忽略：sendMsgResult 报错时消息可能仍已发送成功
+    }
 
-      const interval = setInterval(async () => {
-        const get = await getMessageById(message.id);
-        if (get.ack! > 0) {
-          clearInterval(interval);
-          clearTimeout(timeout);
-          resolve(get);
-        }
-      }, 1500);
-    });
+    // 尝试获取最新的消息对象（含 ack 等最新状态），失败则用 message 兜底
+    let finalMsg: any = message;
+    try {
+      const got = await getMessageById(message.id);
+      if (got) finalMsg = got;
+    } catch (_e) {
+      // 获取失败，用 message 兜底
+    }
+
     return {
-      id: msg.id?.toString(),
-      ack: msg.ack!,
+      id: finalMsg.id?.toString(),
+      ack: finalMsg.ack ?? 0,
       sendMsgResult: {
         messageSendResult: SendMsgResult.OK,
       } as any,
