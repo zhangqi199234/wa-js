@@ -92,11 +92,6 @@ const waitMainInit = internalEv.waitFor('conn.main_init');
 const waitMainReady = internalEv.waitFor('conn.main_ready');
 
 export function injectLoader(): void {
-  if ((window as any).__WPP_INITIALIZED__) {
-    debug('WPP already initialized by another instance, skipping...');
-    return;
-  }
-  (window as any).__WPP_INITIALIZED__ = true;
   if (isInjected) {
     return;
   }
@@ -264,11 +259,6 @@ export function moduleSource(moduleId: string) {
     return '';
   }
 
-  // 🔧 关键修复：检查 webpackRequire 是否已初始化
-  if (!webpackRequire || !webpackRequire.m) {
-    return '';
-  }
-
   if (!webpackRequire.m[moduleId]) {
     return '';
   }
@@ -315,13 +305,6 @@ export function searchId(
   // Check cache first
   if (searchIdCache.has(condition)) {
     return searchIdCache.get(condition)!;
-  }
-
-  // 🔧 关键修复：检查 webpackRequire 是否已初始化
-  // 避免在 injectLoader() 完成前调用导致 "Cannot read properties of undefined (reading 'm')" 错误
-  if (!webpackRequire || !webpackRequire.m) {
-    debug(`webpackRequire not initialized yet for: ${condition.toString()}`);
-    return null;
   }
 
   let ids = Object.keys(webpackRequire.m);
@@ -403,12 +386,6 @@ export function modules(
 ): { [key: string]: any } {
   const modules: { [key: string]: any } = {};
 
-  // 🔧 关键修复：检查 webpackRequire 是否已初始化
-  if (!webpackRequire || !webpackRequire.m) {
-    debug(`webpackRequire not initialized yet for modules search`);
-    return modules;
-  }
-
   let ids = Object.keys(webpackRequire.m);
 
   if (reverse) {
@@ -439,10 +416,6 @@ export function modules(
 }
 
 export function loadModule<T = any>(moduleId: string) {
-  // 🔧 关键修复：检查 webpackRequire 是否已初始化
-  if (!webpackRequire) {
-    return undefined as T;
-  }
   const module = !/^fallback_/.test(moduleId)
     ? webpackRequire(moduleId)
     : fallbackModules[moduleId];
