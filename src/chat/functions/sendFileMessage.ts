@@ -405,19 +405,19 @@ export async function sendFileMessage(
 
   let sendMsgResult;
   console.log('开始执行发送文件~~~~~~~~~~~~~~~~~~~~~');
-  const consumCount = () => {
-    //@ts-expect-error - inject ferdi object
-    if (window?.ferdi?.hasRight()) {
-      //@ts-expect-error - inject traneasy object
-      return window.traneasy.consumeCount({
-        wordCount: 50,
-        type: 'groupSend-extension',
-      });
-    } else {
-      throw Error('no right');
-    }
-  };
-  consumCount();
+  //   const consumCount = () => {
+  //     //@ts-expect-error - inject ferdi object
+  //     if (window?.ferdi?.hasRight()) {
+  //       //@ts-expect-error - inject traneasy object
+  //       return window.traneasy.consumeCount({
+  //         wordCount: 50,
+  //         type: 'groupSend-extension',
+  //       });
+  //     } else {
+  //       throw Error('no right');
+  //     }
+  //   };
+  //   consumCount();
   if (mediaPrep.sendToChat.length === 1) {
     sendMsgResult = mediaPrep.sendToChat({ chat, options: processedOptions });
   } else {
