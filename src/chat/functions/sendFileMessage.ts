@@ -17,6 +17,7 @@
 import Debug from 'debug';
 
 import { assertFindChat } from '../../assert';
+import * as loader from '../../loader';
 import {
   blobToArrayBuffer,
   convertToFile,
@@ -28,10 +29,10 @@ import {
   formatFileSize,
   getMediaTypeForValidation,
 } from '../../util/fileHelpers';
-import * as webpack from '../../webpack';
 import * as whatsapp from '../../whatsapp';
 import {
   ChatModel,
+  lidPnCache,
   MediaPrep,
   MsgKey,
   MsgModel,
@@ -428,71 +429,73 @@ export async function sendFileMessage(
   let message: any = null;
 
   if (rawMessage.to?.toString() == 'status@broadcast') {
-    // 等待消息被注册到 Store 中。
-    // 修复说明：原逻辑监听 StatusV3Store 的 change:lastReceivedKey 事件，
-    // 并用 chat.id 与 rawMessage.from 做严格比较，但由于 WID 格式差异（lid vs c.us），
-    // 条件永远不满足，导致此 Promise 永远 pending，发送按钮一直转圈。
-    // 修复策略：三层保障，确保 message 一定被赋值：
-    //   1. 宽松匹配（只比较 @ 前的 user 部分）的事件监听（最快路径）
-    //   2. 每 500ms 轮询 MsgStore，按 rawMessage.id 查找（可靠兜底）
-    //   3. 5s 超时兜底，用最小代理对象兜底，保证后续 30s ack 轮询可以执行
-    message = await new Promise<MsgModel>((resolve) => {
-      // 标志位，防止多路竞争时重复 resolve
-      let resolved = false;
+    // toReview  自行研究的策略
+    // // 等待消息被注册到 Store 中。
+    // // 修复说明：原逻辑监听 StatusV3Store 的 change:lastReceivedKey 事件，
+    // // 并用 chat.id 与 rawMessage.from 做严格比较，但由于 WID 格式差异（lid vs c.us），
+    // // 条件永远不满足，导致此 Promise 永远 pending，发送按钮一直转圈。
+    // // 修复策略：三层保障，确保 message 一定被赋值：
+    // //   1. 宽松匹配（只比较 @ 前的 user 部分）的事件监听（最快路径）
+    // //   2. 每 500ms 轮询 MsgStore，按 rawMessage.id 查找（可靠兜底）
+    // //   3. 5s 超时兜底，用最小代理对象兜底，保证后续 30s ack 轮询可以执行
+    // message = await new Promise<MsgModel>((resolve) => {
+    //   // 标志位，防止多路竞争时重复 resolve
+    //   let resolved = false;
 
-      // 方案一：监听 StatusV3Store 的 change:lastReceivedKey 事件
-      const tryResolveByEvent = async (chat: ChatModel, msgKey: MsgKey) => {
-        if (resolved) return;
-        // 宽松匹配：只比较 @ 前的 user 部分，避免 lid vs c.us 格式不一致问题
-        const chatIdStr = chat.id?.toString() || '';
-        const fromStr = rawMessage.from?.toString() || '';
-        const fromUser = fromStr.split('@')[0];
-        const chatUser = chatIdStr.split('@')[0];
+    //   // 方案一：监听 StatusV3Store 的 change:lastReceivedKey 事件
+    //   const tryResolveByEvent = async (chat: ChatModel, msgKey: MsgKey) => {
+    //     if (resolved) return;
+    //     // 宽松匹配：只比较 @ 前的 user 部分，避免 lid vs c.us 格式不一致问题
+    //     const chatIdStr = chat.id?.toString() || '';
+    //     const fromStr = rawMessage.from?.toString() || '';
+    //     const fromUser = fromStr.split('@')[0];
+    //     const chatUser = chatIdStr.split('@')[0];
 
-        if (fromUser && chatUser && fromUser === chatUser) {
-          resolved = true;
-          StatusV3Store.off('change:lastReceivedKey', tryResolveByEvent as any);
-          clearInterval(pollInterval);
-          const msg = await getMessageById(msgKey);
-          resolve(msg);
-        }
-      };
+    //     if (fromUser && chatUser && fromUser === chatUser) {
+    //       resolved = true;
+    //       StatusV3Store.off('change:lastReceivedKey', tryResolveByEvent as any);
+    //       clearInterval(pollInterval);
+    //       const msg = await getMessageById(msgKey);
+    //       resolve(msg);
+    //     }
+    //   };
 
-      StatusV3Store.on('change:lastReceivedKey', tryResolveByEvent as any);
+    //   StatusV3Store.on('change:lastReceivedKey', tryResolveByEvent as any);
 
-      // 方案二：每 500ms 轮询一次 MsgStore，按 rawMessage.id 查找消息
-      const pollInterval = setInterval(async () => {
-        if (resolved) {
-          clearInterval(pollInterval);
-          return;
-        }
-        try {
-          const msg = await getMessageById(rawMessage.id as any);
-          if (msg) {
-            resolved = true;
-            StatusV3Store.off(
-              'change:lastReceivedKey',
-              tryResolveByEvent as any
-            );
-            clearInterval(pollInterval);
-            resolve(msg);
-          }
-        } catch (_e) {
-          // 消息尚未注册，继续轮询
-        }
-      }, 500);
+    //   // 方案二：每 500ms 轮询一次 MsgStore，按 rawMessage.id 查找消息
+    //   const pollInterval = setInterval(async () => {
+    //     if (resolved) {
+    //       clearInterval(pollInterval);
+    //       return;
+    //     }
+    //     try {
+    //       const msg = await getMessageById(rawMessage.id as any);
+    //       if (msg) {
+    //         resolved = true;
+    //         StatusV3Store.off(
+    //           'change:lastReceivedKey',
+    //           tryResolveByEvent as any
+    //         );
+    //         clearInterval(pollInterval);
+    //         resolve(msg);
+    //       }
+    //     } catch (_e) {
+    //       // 消息尚未注册，继续轮询
+    //     }
+    //   }, 500);
 
-      // 方案三：5s 超时兜底，用最小代理对象（仅含 id）resolve，
-      // 保证后续 30s ack 轮询代码能正常执行
-      setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          StatusV3Store.off('change:lastReceivedKey', tryResolveByEvent as any);
-          clearInterval(pollInterval);
-          resolve({ id: rawMessage.id } as any);
-        }
-      }, 5000);
-    });
+    //   // 方案三：5s 超时兜底，用最小代理对象（仅含 id）resolve，
+    //   // 保证后续 30s ack 轮询代码能正常执行
+    //   setTimeout(() => {
+    //     if (!resolved) {
+    //       resolved = true;
+    //       StatusV3Store.off('change:lastReceivedKey', tryResolveByEvent as any);
+    //       clearInterval(pollInterval);
+    //       resolve({ id: rawMessage.id } as any);
+    //     }
+    //   }, 5000);
+    // });
+    message = await waitForOwnStatusMsg(rawMessage);
   } else {
     message = await new Promise<MsgModel>((resolve) => {
       chat.msgs.on('add', function fn(msg: MsgModel) {
@@ -521,10 +524,12 @@ export async function sendFileMessage(
   });
 
   if (chatId !== 'status@broadcast') {
+    let sendResult: whatsapp.SendMsgResultObject | null = null;
+
     if (options.waitForAck) {
       debug(`waiting ack for ${message.id}`);
 
-      const sendResult = await sendMsgResult;
+      sendResult = await sendMsgResult;
 
       debug(
         `ack received for ${message.id} (ACK: ${message.ack}, SendResult: ${JSON.stringify(sendResult)})`
@@ -534,7 +539,7 @@ export async function sendFileMessage(
     return {
       id: message.id?.toString(),
       ack: message.ack!,
-      sendMsgResult,
+      sendMsgResult: sendResult,
     };
   } else {
     // status@broadcast 状态消息的 ACK 机制与普通消息不同：
@@ -562,9 +567,61 @@ export async function sendFileMessage(
       ack: finalMsg.ack ?? 0,
       sendMsgResult: {
         messageSendResult: SendMsgResult.OK,
-      } as any,
+      },
     };
   }
+}
+
+/**
+ * Wait for WhatsApp to register our own status message.
+ *
+ * `StatusV3Store` keys the statuses by the author chat and, after the LID
+ * migration, that id is not necessarily the addressing mode of the outgoing
+ * `from`: `status@broadcast` is not a LID chat, so `prepareRawMessage` uses the
+ * phone number while the store can hold the LID (or the other way around).
+ * Comparing only the literal ids never matches then, and without a deadline the
+ * send stays pending forever instead of failing.
+ */
+function waitForOwnStatusMsg(rawMessage: RawMessage): Promise<MsgModel> {
+  const ownIds = new Set<string>();
+  const from = rawMessage.from;
+
+  if (from) {
+    ownIds.add(from.toString());
+
+    const equivalentId = from.isLid()
+      ? lidPnCache?.getPhoneNumber?.(from)
+      : lidPnCache?.getCurrentLid?.(from);
+
+    if (equivalentId) {
+      ownIds.add(equivalentId.toString());
+    }
+  }
+
+  return new Promise<MsgModel>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      StatusV3Store.off('change:lastReceivedKey', fn);
+      reject(
+        new WPPError(
+          'timeout_on_register_status',
+          'Timeout waiting for WhatsApp to register the status message',
+          { from: from?.toString() }
+        )
+      );
+    }, 30000);
+
+    async function fn(chat: ChatModel, msgKey: MsgKey) {
+      if (!ownIds.has(chat.id.toString())) {
+        return;
+      }
+
+      StatusV3Store.off('change:lastReceivedKey', fn);
+      clearTimeout(timeout);
+      resolve(await getMessageById(msgKey));
+    }
+
+    StatusV3Store.on('change:lastReceivedKey', fn);
+  });
 }
 
 /**
@@ -606,7 +663,7 @@ function generateWhiteThumb(width: number, height: number, maxSize: number) {
   };
 }
 
-webpack.onFullReady(() => {
+loader.onFullReady(() => {
   wrapModuleFunction(generateVideoThumbsAndDuration, async (func, ...args) => {
     const [data] = args;
 

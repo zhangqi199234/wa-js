@@ -10,6 +10,7 @@
     "outDir": "./dist",
     "removeComments": false,
     "resolveJsonModule": true,
+    "rootDir": "./src",
     "skipLibCheck": true,
     "sourceMap": true,
     "strict": true,

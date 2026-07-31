@@ -14,9 +14,21 @@
  * limitations under the License.
  */
 
+// import Debug from 'debug';
+
 import { SendMessageReturn } from '../../chat';
 import { MsgStore, StatusV3Store } from '../../whatsapp';
 
+// const debug = Debug('WA-JS:status');
+
+/**
+ * Register a sent status in the status stores, so it shows up in the UI.
+ *
+ * `sendRawMessage` already awaits the send result before returning, so this
+ * receives a resolved value and must not treat it as a promise. Updating the
+ * stores is cosmetic too: a failure here must not reject a status that was
+ * already sent.
+ */
 export function postSendStatus(result: SendMessageReturn): void {
   if (!result.sendMsgResult) {
     return;
@@ -28,6 +40,7 @@ export function postSendStatus(result: SendMessageReturn): void {
     if (!msg) {
       return;
     }
+
     StatusV3Store.addStatusMessages(msg.author as any, [msg]);
 
     // Trigger screen update
