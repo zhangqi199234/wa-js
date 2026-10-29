@@ -406,6 +406,7 @@ export async function sendFileMessage(
 
   let sendMsgResult;
   console.log('开始执行发送文件~~~~~~~~~~~~~~~~~~~~~');
+  //发送文件在 js\wpp-bridge.js 1585 已计数 此处不再重复计数
   //   const consumCount = () => {
   //     //@ts-expect-error - inject ferdi object
   //     if (window?.ferdi?.hasRight()) {
