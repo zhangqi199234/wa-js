@@ -80,6 +80,18 @@ async function start() {
     }
   });
 
+  // Verify lazy bindings after requesting their bundles; they must still
+  // resolve below, so a removed export or broken finder remains a failure.
+  await page.evaluate(async () => {
+    for (const moduleId of [
+      'WAWebGenerateEventCallLink',
+      'WAWebGroupGetCommunityParticipantsJob',
+      'WAWebSetPrivacyForOneCategoryAction',
+    ]) {
+      await window.WPP.loader.ensureLazyModule(moduleId);
+    }
+  });
+
   const result = await page.evaluate((dirs: string[]) => {
     const result: any = {};
 
@@ -127,12 +139,24 @@ async function start() {
    * This will not directly affect the function call, it continues to work normally.
    */
   const ignoreFailModules: string[] = [
+    // Older builds retain img/imgFull model properties instead of the native
+    // thumb getters. getProfilePictureUrl explicitly covers that fallback.
+    'functions.getImg',
+    'functions.getImgFull',
+    // Removed from native list mutations on recent WA builds; older versions
+    // still enforce it through lists/assertListEditingAvailable.
+    'functions.labelsEditingEnabled',
     'enums.StreamInfo', // Plain TypeScript enum, not a webpack module
     'enums.StreamMode', // Plain TypeScript enum, not a webpack module
     'functions.createCollection',
     'functions.deleteCollection',
     'functions.editCollection',
+    // Both forward modules ship in a resource bundle WhatsApp's Bootloader only
+    // fetches on demand, so they are legitimately unresolved on a session that
+    // never forwards. `WPP.chat.forwardMessage(s)` load it through
+    // `ensureLazyModule()` before use (see src/loader/lazyModules.ts).
     'functions.forwardMessages',
+    'functions.forwardMessagesToChats',
     'functions.setPushname',
     'functions.revokeStatus',
     'functions.muteNewsletter', // removed in version 2.3000.1032373751
@@ -151,7 +175,19 @@ async function start() {
     'functions.subscribeGroupPresence', // added in WAWebContactPresenceBridge >= ~2.3000.1039447205
     'functions.getUserhash', // removed from WAWebContactGetters in WA ~2.3000.1043126001, reimplemented in src/contact/patch.ts
     'Constants', // WAWebConstantsDeprecated removed from WA ~= 2.3000.1044096409
+    // WAWebConnGetters was introduced in WA ~2.3000.1045643679; every older
+    // version still exposes isSMB directly on Conn, so the miss is expected
+    // there (src/whatsapp/misc/ConnGetters.ts falls back to Conn.isSMB).
+    'ConnGetters',
     'functions.createGroup', // WAWebGroupCreateJob only registers after login on WA >= ~2.3000.1044096409
+    // WAWebGroupCommunityJob moved into an on-demand resource bundle in WA
+    // ~2.3000.1045986927 and only `.react` community flows pull it, so it is
+    // unresolved on this test (which never logs in). `WPP.community.*` loads
+    // it through `ensureCommunityJob()` before use.
+    'functions.sendCreateCommunity',
+    'functions.sendDeactivateCommunity',
+    'functions.sendLinkSubgroups',
+    'functions.sendUnlinkSubgroups',
     // The group invite-code modules load lazily and are not registered on the
     // QR screen on WA >= ~2.3000.1040 (this test never logs in)
     'functions.joinGroupViaInvite',

@@ -23,7 +23,7 @@ import { labelDeleteAction } from './labelAddAction';
 export function callLabelDeleteAction(
   id: string,
   name: string,
-  colorIndex: number
+  colorIndex: number | null
 ): Promise<number | void> {
   if (labelDeleteAction.length === 1) {
     return labelDeleteAction({ labelId: id, name, color: colorIndex });

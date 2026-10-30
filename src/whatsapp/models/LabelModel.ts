@@ -25,7 +25,9 @@ import {
 interface Props {
   id: string;
   name: string;
-  colorIndex?: number;
+  orderIndex?: number | null;
+  colorIndex?: number | null;
+  isActive?: boolean;
   color?: number;
   count?: any;
   type?: number;
